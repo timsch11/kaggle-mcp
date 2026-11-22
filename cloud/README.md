@@ -63,7 +63,15 @@ KAGGLE_MCP_WORKSPACE=/tmp/kaggle-workspace
 
 ## 3. Add the MCP server to the repositories you work in
 
-`.mcp.json` from a session's repository is loaded automatically (in sessions with a single repo).
+`.mcp.json` from a session's repository is loaded automatically, but only in sessions with a
+**single repository** that aren't **Project threads**. Multi-repo sessions and Project threads don't
+load `.mcp.json` servers. An environment by itself only *installs* the `kaggle-mcp` command:
+something has to *register* it as a server.
+
+**Automatic (best effort):** [setup.sh](setup.sh) also registers `kaggle` as a user-scope server in
+the VM's `/root/.claude.json`, so it can appear in sessions on any repository. Cloud docs don't cover
+this route, so if the tools don't show up in another repo, use that repo's `.mcp.json` (below).
+Set `REGISTER_USER_SCOPE=false` at the top of the script to turn it off.
 
 **In this repository:** already done. [/.mcp.json](../.mcp.json) runs
 [kaggle-mcp-launch.sh](kaggle-mcp-launch.sh).
@@ -90,16 +98,29 @@ Start a cloud session with the environment and ask Claude to run `kaggle_auth_st
 
 | Symptom | Likely cause |
 |---|---|
-| No `kaggle` tools at all | Setup script failed (check the session's setup log), or the repo has no `.mcp.json` |
+| No `kaggle` tools at all | Run the diagnostics below. Usual causes: the repo has no `.mcp.json`, it's a multi-repo session or Project thread, or the setup script failed (check the setup log) |
 | `401 Unauthenticated` | Network secret missing, its host isn't exactly `api.kaggle.com`, or the token is wrong or expired |
 | Connection or "host not allowed" errors | `api.kaggle.com` is missing from Allowed domains |
 | "Username unknown in proxy-auth mode" | `KAGGLE_USERNAME` isn't set; full `owner/slug` refs still work |
 | Downloads fail | *Allow package managers* was unchecked, which removes `storage.googleapis.com` from the allowlist |
 
+### Diagnostics
+
+Inside a cloud session, ask Claude to run this (it prints no secrets):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/timsch11/kaggle-mcp/main/cloud/doctor.sh | bash
+```
+
+It checks the install, where `kaggle` is registered, the configuration flags, whether
+`api.kaggle.com` is reachable and the network secret is applied (HTTP 200 vs 401), and whether the server
+answers an MCP handshake.
+
 ## How the pieces fit
 
-* **[setup.sh](setup.sh)** runs as root before Claude starts. It creates `/opt/kaggle-mcp` (a venv),
-  installs the package from `KAGGLE_MCP_SOURCE`, and links `kaggle-mcp` into `/usr/local/bin`. The
+* **[setup.sh](setup.sh)** runs as root before Claude starts. It creates `/opt/kaggle-mcp` (a venv, with
+  `uv` when available, so the `python3-venv` package isn't needed), installs the package from
+  `KAGGLE_MCP_SOURCE`, links `kaggle-mcp` into `/usr/local/bin`, and registers the user-scope server. The
   result is cached between sessions. It's rebuilt when the script or the allowed hosts change, or about
   every 7 days.
 * **[kaggle-mcp-launch.sh](kaggle-mcp-launch.sh)** is what this repo's `.mcp.json` starts. It uses

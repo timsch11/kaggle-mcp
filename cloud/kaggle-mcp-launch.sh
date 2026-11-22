@@ -16,8 +16,13 @@ if command -v kaggle-mcp >/dev/null 2>&1; then
 fi
 if [ -f "$ROOT/pyproject.toml" ]; then
   echo "kaggle-mcp: installing from $ROOT (first run)..." >&2
-  python3 -m venv "$ROOT/.venv" >&2
-  "$ROOT/.venv/bin/pip" install --quiet --disable-pip-version-check "$ROOT" >&2
+  if command -v uv >/dev/null 2>&1; then  # preinstalled in cloud images, no python3-venv needed
+    uv venv --quiet "$ROOT/.venv" >&2
+    uv pip install --quiet --python "$ROOT/.venv/bin/python" "$ROOT" >&2
+  else
+    python3 -m venv "$ROOT/.venv" >&2
+    "$ROOT/.venv/bin/pip" install --quiet --disable-pip-version-check "$ROOT" >&2
+  fi
   exec "$ROOT/.venv/bin/kaggle-mcp" "$@"
 fi
 echo "kaggle-mcp is not installed (see cloud/README.md)" >&2
