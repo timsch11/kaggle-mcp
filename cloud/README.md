@@ -20,12 +20,13 @@ cloud session VM                               Anthropic egress proxy          K
 Cloud sessions clone a GitHub repository. How the server gets installed depends on whether that
 repository is private or public:
 
-* **Private repo (the default here):** the setup script can't `pip install` from a private repository,
-  so it skips the install. In sessions **on the kaggle-mcp repository**, the launcher in
+* **Private repo:** the setup script can't `pip install` from a private repository,
+  so the install fails with a warning (set `KAGGLE_MCP_SOURCE=""` to skip it). In sessions **on the kaggle-mcp repository**, the launcher in
   `.mcp.json` installs the server from the checked-out code on first start, which took about 12 s in testing.
   Use the kaggle-mcp repo as the session's repository, or add it next to your project.
-* **Public repo, or a published package:** set `KAGGLE_MCP_SOURCE` at the top of [setup.sh](setup.sh)
-  (e.g. `git+https://github.com/<you>/kaggle-mcp.git@v0.1.0`). The server is then preinstalled and
+* **Public repo, or a published package:** [setup.sh](setup.sh) installs from
+  `git+https://github.com/timsch11/kaggle-mcp.git`, pinned to a commit in `KAGGLE_MCP_REF`
+  (change it, or `KAGGLE_MCP_SOURCE`, to upgrade or use a release tag such as `@v0.1.0`). The server is then preinstalled and
   cached, and any repository with the short `.mcp.json` from step 3 can use it. Pinning a tag or
   commit means sessions only ever run code you have reviewed.
 

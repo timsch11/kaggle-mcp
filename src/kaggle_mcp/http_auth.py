@@ -11,13 +11,21 @@ A pure-ASGI middleware that protects every route except ``/healthz``:
   The URL itself becomes the secret - treat it like a password.
 
 Tokens are compared in constant time. Repeated failures from one client IP are
-throttled to slow down brute-force attempts.
+throttled (429), but a request carrying the valid token is always accepted, so
+an attacker sharing an IP with you (e.g. a reverse proxy without
+``--behind-proxy``) cannot lock you out. Brute force stays infeasible because
+tokens must be at least 32 characters (``generate-token`` gives 64).
+
+Because the secret path puts the token in the URL, ``RedactPathTokenFilter``
+removes it from access-log lines.
 """
 
 from __future__ import annotations
 
 import hmac
 import json
+import logging
+import re
 import time
 from collections import defaultdict, deque
 from typing import Any, Awaitable, Callable
@@ -27,6 +35,29 @@ ASGIApp = Callable[[Scope, Callable, Callable], Awaitable[None]]
 
 MIN_TOKEN_LENGTH = 32
 PATH_PREFIX = "/s/"
+_PATH_TOKEN_RE = re.compile(r"/s/[^/?#\s\"]+")
+
+
+def redact_path_token(text: str) -> str:
+    """Replace the token in any ``/s/<token>`` segment with ``<redacted>``."""
+    return _PATH_TOKEN_RE.sub("/s/<redacted>", text)
+
+
+class RedactPathTokenFilter(logging.Filter):
+    """Logging filter that strips secret-path tokens from log records.
+
+    Attach to uvicorn's access log: it logs the raw request path (before this
+    middleware rewrites it), which would otherwise write the token in plain text.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_path_token(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(redact_path_token(a) if isinstance(a, str) else a for a in record.args)
+        elif isinstance(record.args, dict):
+            record.args = {k: redact_path_token(v) if isinstance(v, str) else v for k, v in record.args.items()}
+        return True
 
 
 class BearerAuthMiddleware:
@@ -78,9 +109,6 @@ class BearerAuthMiddleware:
 
         client = scope.get("client") or ("unknown", 0)
         ip = str(client[0])
-        if self._throttled(ip):
-            await _json(send, 429, {"error": "too_many_failed_attempts"})
-            return
 
         # 1) Secret path token: /s/<token>/mcp -> /mcp
         if self._allow_path_token and path.startswith(PATH_PREFIX):
@@ -92,8 +120,7 @@ class BearerAuthMiddleware:
                 new_scope["raw_path"] = new_scope["path"].encode()
                 await self.app(new_scope, receive, send)
                 return
-            self._record_failure(ip)
-            await _json(send, 404, {"error": "not_found"})
+            await self._reject(send, ip, 404, {"error": "not_found"})
             return
 
         # 2) Authorization: Bearer <token>
@@ -107,8 +134,17 @@ class BearerAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
+        await self._reject(
+            send, ip, 401, {"error": "unauthorized"}, [(b"www-authenticate", b'Bearer realm="kaggle-mcp"')]
+        )
+
+    async def _reject(self, send: Callable, ip: str, status: int, body: dict, extra: list | None = None) -> None:
+        # Throttling applies to failed attempts only: a valid token is never blocked.
+        if self._throttled(ip):
+            await _json(send, 429, {"error": "too_many_failed_attempts"})
+            return
         self._record_failure(ip)
-        await _json(send, 401, {"error": "unauthorized"}, [(b"www-authenticate", b'Bearer realm="kaggle-mcp"')])
+        await _json(send, status, body, extra)
 
 
 async def _json(send: Callable, status: int, body: dict, extra: list | None = None) -> None:

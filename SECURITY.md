@@ -8,7 +8,7 @@ covers what is protected, how, and what you are still responsible for.
 | Threat | Mitigation |
 |---|---|
 | **Credential leakage:** the Kaggle token ends up in logs, tool output, tracebacks or third-party requests | The token is loaded lazily and kept in memory only. `Credentials.__repr__` is redacted. The `Authorization` header goes only to `https://api.kaggle.com`. Signed storage URLs (downloads and uploads) are fetched by a separate HTTP client that never carries credentials, and redirects are followed manually. Tools never return credentials, and `kaggle_auth_status` shows only the credential *source*. Unexpected exceptions reach the model only as `Error executing tool <name>`, with no details. `httpx` logging is limited to WARNING. |
-| **Unauthorized remote access** to the HTTP endpoint | HTTP mode requires `KAGGLE_MCP_AUTH_TOKEN` (≥ 32 chars). The server refuses to start on a non-loopback address without it. Tokens are compared in constant time (`hmac.compare_digest`). Each client IP is limited to 20 failed attempts per 5 minutes, after which it gets 429. Only `/healthz` is unauthenticated. |
+| **Unauthorized remote access** to the HTTP endpoint | HTTP mode requires `KAGGLE_MCP_AUTH_TOKEN` (≥ 32 chars). The server refuses to start on a non-loopback address without it. Tokens are compared in constant time (`hmac.compare_digest`). Each client IP is limited to 20 failed attempts per 5 minutes, after which further failures get 429; a request with the valid token is always accepted, so a shared IP cannot be used to lock you out. Secret-path tokens are redacted from the server's access log. Only `/healthz` is unauthenticated. |
 | **DNS rebinding / cross-origin browser attacks** | On localhost, the MCP SDK's Host/Origin validation is on automatically. For public deployments, set `KAGGLE_MCP_ALLOWED_HOSTS` to enable it for your hostname. Requests with any other `Host` header are rejected with 421. |
 | **Path traversal / arbitrary file read or write**, e.g. a prompt-injected model asking to upload `~/.ssh/id_rsa` | All local file access goes through `Workspace.resolve`. Only relative paths are accepted. Paths are resolved through symlinks and must stay inside `KAGGLE_MCP_WORKSPACE`. Absolute paths, `..`, drive letters and NUL bytes are rejected, and symlinks pointing outside are neither followed nor listed. File names supplied by the server are reduced to safe single components. |
 | **Malicious archives** (zip slip, symlinks, zip bombs) | `workspace_unzip` checks every member's resolved path, skips symlink entries, limits archives to 20,000 entries, and caps the declared *and* the actually extracted size at 4× the download limit. |
@@ -24,7 +24,8 @@ covers what is protected, how, and what you are still responsible for.
   client for write tools, or use `KAGGLE_MCP_READ_ONLY=true` for research-only sessions.
 * **Protect the HTTP token, and the secret URL if you enable `KAGGLE_MCP_ALLOW_PATH_TOKEN`.** Anyone
   holding either can act as you on Kaggle. Rotate it (`kaggle-mcp generate-token`) if it may have leaked.
-  Prefer header-based Bearer auth wherever the client supports it.
+  Prefer header-based Bearer auth wherever the client supports it. kaggle-mcp redacts the token from its
+  own access log, but a reverse proxy or tunnel in front of it logs the full URL unless you configure it not to.
 * **Always terminate TLS** in front of the HTTP transport (reverse proxy or tunnel). Never expose plain HTTP.
   When behind a proxy, use `--behind-proxy` and set `FORWARDED_ALLOW_IPS` to the proxy's address so
   failure throttling sees real client IPs.
