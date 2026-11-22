@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kaggle": {
+      "type": "stdio",
+      "command": "bash",
+      "args": ["${CLAUDE_PROJECT_DIR:-.}/cloud/kaggle-mcp-launch.sh"]
+    }
+  }
+}
