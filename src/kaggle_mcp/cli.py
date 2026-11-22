@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import logging
 import os
 import secrets
@@ -16,6 +17,18 @@ import sys
 from kaggle_mcp import __version__
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _uvicorn_log_config() -> dict:
+    """uvicorn's default logging config plus a filter that redacts secret-path
+    tokens (/s/<token>/...) from access-log lines."""
+    from uvicorn.config import LOGGING_CONFIG
+
+    cfg = copy.deepcopy(LOGGING_CONFIG)
+    cfg.setdefault("filters", {})["redact_path_token"] = {"()": "kaggle_mcp.http_auth.RedactPathTokenFilter"}
+    for handler in cfg.get("handlers", {}).values():
+        handler.setdefault("filters", []).append("redact_path_token")
+    return cfg
 
 
 def _http(args: argparse.Namespace) -> None:
@@ -40,6 +53,12 @@ def _http(args: argparse.Namespace) -> None:
                 "unauthenticated on localhost only (not recommended)."
             )
         logging.warning("HTTP transport running WITHOUT authentication on %s", args.host)
+
+    if args.host not in LOCAL_HOSTS and not args.behind_proxy:
+        logging.warning(
+            "Serving on %s without --behind-proxy: if a reverse proxy is in front, every client shares "
+            "its IP for failed-auth throttling", args.host
+        )
 
     allowed_hosts = [h.strip() for h in os.environ.get("KAGGLE_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
     security = None
@@ -72,6 +91,7 @@ def _http(args: argparse.Namespace) -> None:
         host=args.host,
         port=args.port,
         log_level="info",
+        log_config=_uvicorn_log_config(),
         proxy_headers=args.behind_proxy,
         forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1") if args.behind_proxy else None,
         server_header=False,

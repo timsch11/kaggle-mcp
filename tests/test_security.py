@@ -12,7 +12,7 @@ import pytest
 
 from kaggle_mcp.auth import CredentialsError, load_credentials
 from kaggle_mcp.client import KaggleAPIError
-from kaggle_mcp.http_auth import BearerAuthMiddleware
+from kaggle_mcp.http_auth import BearerAuthMiddleware, RedactPathTokenFilter
 from kaggle_mcp.workspace import Workspace, WorkspaceError, safe_filename
 
 from .conftest import FAKE_TOKEN, result_data
@@ -221,9 +221,42 @@ async def test_path_token_when_enabled():
 async def test_bruteforce_throttled():
     async with _client(max_failures=3) as c:
         for _ in range(3):
+            assert (await c.post("/mcp", headers={"Authorization": "Bearer nope"})).status_code == 401
+        assert (await c.post("/mcp", headers={"Authorization": "Bearer nope"})).status_code == 429
+        assert (await c.post("/mcp")).status_code == 429
+
+
+async def test_valid_token_not_locked_out_by_failures():
+    # An attacker sharing the client's IP must not be able to lock out the real user.
+    async with _client(max_failures=3, allow_path_token=True) as c:
+        for _ in range(5):
             await c.post("/mcp", headers={"Authorization": "Bearer nope"})
-        r = await c.post("/mcp", headers={"Authorization": f"Bearer {TOKEN}"})
-        assert r.status_code == 429
+        assert (await c.post("/mcp", headers={"Authorization": "Bearer nope"})).status_code == 429
+        assert (await c.post("/mcp", headers={"Authorization": f"Bearer {TOKEN}"})).status_code == 200
+        assert (await c.post("/s/wrong/mcp")).status_code == 429
+        assert (await c.post(f"/s/{TOKEN}/mcp")).status_code == 200
+
+
+def test_access_log_redacts_path_token():
+    import logging
+
+    record = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 0, '%s - "%s %s HTTP/%s" %d',
+        ("1.2.3.4:5", "POST", f"/s/{TOKEN}/mcp?x=1", "1.1", 200), None,
+    )
+    assert RedactPathTokenFilter().filter(record)
+    line = record.getMessage()
+    assert TOKEN not in line and "/s/<redacted>/mcp?x=1" in line
+
+
+def test_uvicorn_log_config_uses_redaction_filter():
+    import logging.config
+
+    from kaggle_mcp.cli import _uvicorn_log_config
+
+    cfg = _uvicorn_log_config()
+    assert all("redact_path_token" in h["filters"] for h in cfg["handlers"].values())
+    logging.config.dictConfig(cfg)  # must be a valid config
 
 
 def test_short_token_rejected():
